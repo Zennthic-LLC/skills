@@ -1,0 +1,23 @@
+{
+  "name": "zennthic",
+  "owner": {
+    "name": "Zennthic LLC"
+  },
+  "plugins": [
+    {
+      "name": "elefant",
+      "source": "./elefant",
+      "description": "Elefant: persistent second-brain memory. Skills for using Elefant's memory and knowledge tools well."
+    },
+    {
+      "name": "ratel",
+      "source": "./ratel",
+      "description": "Ratel: multi-host Docker management gateway. Skills for operating containers and hosts via Ratel."
+    },
+    {
+      "name": "meer",
+      "source": "./meer",
+      "description": "Meer: guarded Chromium browser automation. Skills for driving Meer browser sessions safely."
+    }
+  ]
+}
