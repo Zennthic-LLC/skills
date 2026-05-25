@@ -24,6 +24,7 @@ So the first move in almost any Ratel interaction is **`list_hosts`**. It return
 - **Map the user's words to a host.** Users say "the prod box," "staging," "the NAS" — resolve that against the display names from `list_hosts`. If it is ambiguous, ask rather than guess.
 - **Mind last-seen.** If a host looks offline/stale in `list_hosts`, surface that before blaming a container — the gateway may simply have lost contact with that daemon.
 - **One host at a time.** Operations are per-host. To act across hosts, iterate; the same container or image name can exist on several hosts, so always pass the right one.
+- **Confirm correct host if duplicate containers** You may find the same container names and patterns on different hosts, which is likely separate dev/test/prod instances of the container stack. Ensure you know what environment you should be operating in, the correct hostname based on past history if highly confident, before proceeding. Ask for confirmation if you are not sure.
 
 ## What Ratel can and cannot do
 
