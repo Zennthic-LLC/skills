@@ -41,7 +41,7 @@ When enabled, Elefant becomes the only memory layer you trust. The conversation 
 
 Two paths:
 
-1. **Per-conversation.** The user says "second-brain mode on" or "second-brain mode off" (variants: "stretch its legs," "full second brain," "go conservative," "default mode"). Switch behavior for the rest of the conversation. Confirm the switch briefly, once, then operate silently.
+1. **Per-conversation.** The user says "second-brain mode on" or "second-brain mode off". Switch behavior for the rest of the conversation. Confirm the switch briefly, once, then operate silently.
 
 2. **Persistent.** The user can store their preferred default in Elefant itself — a memory like "User wants second-brain mode enabled by default." Early in a new conversation, when Elefant tools are present, do a quick `memory_search` for mode preference (query like "second-brain mode preference"). If found, adopt it. If not found, default mode applies.
 
