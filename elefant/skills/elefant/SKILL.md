@@ -1,6 +1,6 @@
 ---
 name: elefant
-description: "Use whenever Elefant MCP tools are available in the session. Elefant is the user's persistent second-brain memory platform — a first-class memory layer that travels across conversations, devices, and agents, plus a shared wiki the agent can both read and author. This skill defines how to use it well — when to search before answering, when and how to capture, which tool to reach for, when durable content belongs in memory versus the wiki, and how to operate in second-brain mode when enabled. Apply this skill aggressively whenever Elefant tools are present, even if the user hasn't explicitly invoked it — Elefant is meant to be the default memory backbone, not a sidecar that waits to be asked."
+description: "Use whenever Elefant MCP tools are available in the session. Elefant is the user's persistent second-brain memory platform — a first-class memory layer that travels across conversations, devices, and agents, plus a shared wiki the agent can both read and author. This skill defines how to use it well — when to search before answering, when and how to capture, which tool to reach for, when durable content belongs in memory versus the wiki, how to read the user's operating mode and configuration from stored settings, and how to operate in second-brain mode when enabled. Apply this skill aggressively whenever Elefant tools are present, even if the user hasn't explicitly invoked it — Elefant is meant to be the default memory backbone, not a sidecar that waits to be asked."
 ---
 
 # Elefant
@@ -48,15 +48,15 @@ When enabled, Elefant becomes the only memory layer you trust. The conversation 
 
 Two paths:
 
-1. **Per-conversation.** The user says "second-brain mode on" or "second-brain mode off" (variants: "stretch its legs," "full second brain," "go conservative," "default mode"). Switch behavior for the rest of the conversation. Confirm the switch briefly, once, then operate silently.
+1. **Per-conversation.** The user says "second-brain mode on" or "second-brain mode off" (variants: "stretch its legs," "full second brain," "go conservative," "default mode"). Switch behavior for the rest of the conversation *without* changing the stored setting. Confirm the switch briefly, once, then operate silently.
 
-2. **Persistent.** The user can store their preferred default in Elefant itself — a memory like "User wants second-brain mode enabled by default." Early in a new conversation, when Elefant tools are present, do a quick `memory_search` for mode preference (query like "second-brain mode preference"). If found, adopt it. If not found, default mode applies.
+2. **Persistent.** The mode is a real stored setting, not a memory. Read it with `get_user_settings` and change the default with `set_user_settings` (`second_brain_mode` → `on`/`off`). Do **not** `memory_search` for the mode — `get_user_settings` is the authoritative source. See *Reading and writing settings* below.
 
-If the user changes mode persistently ("always run in second-brain mode from now on"), capture that preference so future conversations pick it up.
+Resolve the two at the start of a session: read the persistent setting once with `get_user_settings`, then apply any per-conversation override the user states this turn. Persisting a new default ("always run in second-brain mode from now on") means calling `set_user_settings` — a tenant-wide, approve-once write you only make on an explicit request.
 
 ## Tool selection
 
-Elefant exposes many tools. Most are self-explanatory from their descriptions. Three clusters deserve a point of view.
+Elefant exposes many tools. Most are self-explanatory from their descriptions. Four clusters deserve a point of view.
 
 ### Choosing a search tool
 
@@ -86,9 +86,18 @@ A few rules govern it, by design:
 
 Use `wiki_write` for the artifact; still `memory_capture` the *fact that you created it* if it matters for continuity ("Wrote the DB-restore runbook to `AI/runbooks/db-restore.md`").
 
+### Reading and writing settings
+
+`get_user_settings` and `set_user_settings` read and write Elefant's **prescriptive configuration** — real stored values (booleans, numbers), not semantic memory. Never use `search` or `memory_search` to discover them.
+
+- **`get_user_settings`** — call once near the start of a session, before answering, to learn how to operate this session. It returns the tenant's settings as concrete values; a key shown as "system default" has no override set. The key that changes your behavior is `second_brain_mode` (on/off) — it decides which mode you run in (see *Modes*). The others tune the hot-tier compactor — `hot_tier_promote_score`, `hot_tier_drop_score`, `hot_tier_drop_age_days`, `hot_tier_cluster_threshold` — and rarely need your attention unless the user asks about retention or promotion behavior.
+- **`set_user_settings`** — writes ONE setting for the entire tenant. Because it's durable and tenant-wide, treat every call as approve-once: only call it when the user explicitly asks to change a setting ("turn on second-brain mode from now on", "set the promote score to 1.2"). Never call it speculatively or to "tidy up." Pass `default` (or `none`/`clear`) as the value to drop an override and return to the system default. It needs a token with `memory_write` permission; a permission error there is expected, not a bug.
+
+Mode preference and the compactor thresholds live here, not in memory. If the user wants second-brain mode on by default, `set_user_settings second_brain_mode on` — don't write a memory like "user prefers second-brain mode" and try to read it back next session.
+
 ### Other tools
 
-`memory_delete`, `memory_list`, `memory_events`, `get_wiki_page`, `list_sources`, `source_tree`, `set_source_state`, `git_read`, `git_search`, `get_user_settings`, `set_user_settings`, `wiki_reindex`, `reindex_status` — use as their descriptions indicate. These are mostly inspection, source navigation, and administration; they don't need special guidance.
+`memory_delete`, `memory_list`, `memory_events`, `get_wiki_page`, `list_sources`, `source_tree`, `set_source_state`, `git_read`, `git_search`, `wiki_reindex`, `reindex_status` — use as their descriptions indicate. These are mostly inspection, source navigation, and administration; they don't need special guidance.
 
 ## Memory vs. wiki: where durable content belongs
 
@@ -169,6 +178,7 @@ If you discover a memory is stale through the conversation (the user contradicts
 - **Dumping long-form reference material into memory.** A multi-section runbook is a wiki page, not a memory. Use `wiki_write`.
 - **Using `wiki_write` for ephemeral notes.** A one-line preference or "where I left off" is memory, not a document. Don't litter the wiki with fragments.
 - **Trying to write outside the AI folder, or expecting to edit a promoted page.** The AI folder and the move-to-promote boundary are deliberate. Work within them.
+- **Using memory to store or read operating settings.** Second-brain mode and the compactor thresholds are real configuration — read them with `get_user_settings`, change them with `set_user_settings`. A memory like "user wants second-brain mode" is the wrong tool, and `memory_search` is the wrong way to discover the current mode.
 
 ## Quick reference
 
@@ -178,7 +188,8 @@ If you discover a memory is stale through the conversation (the user contradicts
 | Substantive turn ending with durable content | `memory_capture` before closing |
 | User says "remember this exactly" | `memory_add` |
 | User corrects something you said | `memory_update` if a stored memory is now wrong; capture the correction either way |
-| New conversation, Elefant tools present | Quick `memory_search` for mode preference and any obviously relevant context |
+| New conversation, Elefant tools present | `get_user_settings` once to learn mode + config; `search` for any obviously relevant context |
+| User wants the default mode or a compactor threshold changed | `set_user_settings` (explicit request only, approve-once) |
 | Second-brain mode on, durable signal mid-turn | `memory_capture` immediately, keep responding |
 | Search returns contradictions on something consequential | Ask the user |
 | User wants a runbook / SOP / design doc / structured summary | `wiki_write` to a path under the AI folder (subfolders welcome) |
