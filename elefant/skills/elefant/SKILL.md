@@ -18,9 +18,11 @@ Knowing which surface a piece of durable content belongs in is a core skill — 
 
 ## Core philosophy
 
-A second brain only works if you use it like one. That means two reflexes:
+A second brain only works if you use it like one. That means three reflexes:
 
 **Search before you answer.** Anything that touches the user's prior context, preferences, decisions, ongoing projects, or shared vocabulary deserves a search first. Answering from the conversation window alone — when relevant memory exists — produces shallow, repetitive, context-blind responses. The user has invested in this memory platform precisely so you don't have to start cold every time.
+
+**Resolve who and what they mean.** First-person references — "our channel," "we decided," "my repo" — point at entities the user expects you to already know. Resolve them against stored identity before answering; don't infer the referent from whatever happens to be in the current results. If the search turns up no clear identity fact, that absence *is* the signal: ask, then capture the answer so the next agent doesn't have to.
 
 **Capture before you end the turn.** If something durable surfaced during the turn — a decision, a preference, a fact about the user's setup, where you left off on a project — it goes into Elefant before the turn ends. The cost of a missed capture is high (the context is gone). The cost of an extra capture is near zero (the backend handles dedup and promotes durable signal automatically).
 
@@ -66,6 +68,8 @@ Elefant exposes many tools. Most are self-explanatory from their descriptions. F
 
 When in doubt, start with `search`. Narrow to `memory_search` or `wiki_search_only` if results are diluted.
 
+**Search ranks by relevance, not recency.** The top hit is the best *match*, not the *newest* item. When the user asks for the "latest," "newest," or "most recent" of something, don't answer with the first result — resolve by date: read the series' index/landing page (kept newest-first) or compare a dated metadata field (e.g. a `Published:` line) across the candidates. And keep two dates separate: when something happened in the real world versus when its page was written. They diverge — the most recently *authored* page is often not the most recently *published* thing.
+
 ### Choosing a capture tool
 
 - **`memory_capture`** — the default. Cheap, streams into the hot tier, gets clustered and promoted by the backend. Use this for nearly everything: preferences, decisions, project facts, where you left off, observations about the user's setup. Bloat is cheap because the compactor handles dedup and surfaces durable signal automatically.
@@ -85,6 +89,15 @@ A few rules govern it, by design:
 - **Requires the `wiki_write` scope.** If the token lacks it, the tool returns a permission error — that's expected, not a bug. The same scope governs `wiki_reindex`.
 
 Use `wiki_write` for the artifact; still `memory_capture` the *fact that you created it* if it matters for continuity ("Wrote the DB-restore runbook to `AI/runbooks/db-restore.md`").
+
+### Finding the right wiki path
+
+Path handling is the most common stumble, because search and the file tools speak different dialects:
+
+- **Search and `wiki_search_only` display *tenant-prefixed* paths** — e.g. `the-smart-workshop/AI/youtube-transcripts/...`. That leading segment is the tenant / wiki root, **not** part of the page path.
+- **`get_wiki_page` and `wiki_write` want the path with that tenant segment stripped** — start at the top-level folder: `Code Reference/Linux/Armbian.md`, `AI/runbooks/db-restore.md`. Passing the displayed `the-smart-workshop/...` form straight back will 404.
+- **Your writable root is always `AI/`.** Write `AI/<area>/<file>.md`; never prepend the tenant or a brand name to get there (no `the-smart-workshop/AI/...`). A channel, project, or brand can be a *subfolder* — `AI/youtube-transcripts/the-smart-workshop/<video>.md` — and watch the trap when the tenant name and a subfolder name coincide, which makes the displayed path look doubled (`the-smart-workshop/AI/.../the-smart-workshop/...`). Only one of those is the tenant root.
+- **To read an `AI/` page, prefer `search` / `wiki_search_only` over `get_wiki_page`.** Agent-authored `AI/` pages are indexed and searchable, but `get_wiki_page` may 404 on them; the search tools return the page body in chunks, which is the dependable way to read AI content back. If a path you got from search 404s on `get_wiki_page`, don't keep permuting it — fall back to search.
 
 ### Reading and writing settings
 
@@ -179,6 +192,9 @@ If you discover a memory is stale through the conversation (the user contradicts
 - **Using `wiki_write` for ephemeral notes.** A one-line preference or "where I left off" is memory, not a document. Don't litter the wiki with fragments.
 - **Trying to write outside the AI folder, or expecting to edit a promoted page.** The AI folder and the move-to-promote boundary are deliberate. Work within them.
 - **Using memory to store or read operating settings.** Second-brain mode and the compactor thresholds are real configuration — read them with `get_user_settings`, change them with `set_user_settings`. A memory like "user wants second-brain mode" is the wrong tool, and `memory_search` is the wrong way to discover the current mode.
+- **Answering "latest" with the top search hit.** Search ranks by relevance, not recency. Resolve newest by date, not rank.
+- **Guessing who "our/we/my" refers to.** Resolve first-person references against stored identity; if there's no identity fact, ask and capture it rather than inferring from incidental context.
+- **Feeding a displayed (tenant-prefixed) path into a file tool.** `get_wiki_page`/`wiki_write` want the path with the leading tenant segment stripped. Don't keep permuting a 404'ing `AI/` path — read it via `search` instead.
 
 ## Quick reference
 
@@ -194,4 +210,7 @@ If you discover a memory is stale through the conversation (the user contradicts
 | Search returns contradictions on something consequential | Ask the user |
 | User wants a runbook / SOP / design doc / structured summary | `wiki_write` to a path under the AI folder (subfolders welcome) |
 | Long-form content authored | `wiki_write` for the document; short `memory_capture` pointing to it |
-| Reading a wiki page before rewriting it | `get_wiki_page`, then `wiki_write` |
+| Reading a wiki page before rewriting it | `get_wiki_page` (strip the tenant prefix); for `AI/` pages, read via `search` if it 404s |
+| User asks for the "latest / newest" of a series | Resolve by date (index page, newest-first, or a `Published:` field) — not the top search hit |
+| User refers to "our / we / my &lt;thing&gt;" | Resolve against stored identity; if none found, ask, then capture |
+| Search path 404s on `get_wiki_page` / `wiki_write` | Strip the leading tenant segment; writable root is `AI/` |
