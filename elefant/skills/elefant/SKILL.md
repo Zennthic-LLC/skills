@@ -14,6 +14,8 @@ Elefant holds two kinds of durable content, and you can write to both:
 - **Memory** — extracted signal about the user and their work: preferences, decisions, project facts, session context. Captured tersely, retrieved by search, curated automatically by a background compactor.
 - **Wiki** — long-form Markdown documents: runbooks, SOPs, reference material, summaries, design notes. Human-readable pages meant to be read as documents, not retrieved as facts.
 
+It can also have **synced git sources** — read-only code repositories you can search and read alongside the wiki.
+
 Knowing which surface a piece of durable content belongs in is a core skill — see *Memory vs. wiki* below.
 
 ## Core philosophy
@@ -56,21 +58,36 @@ Resolve the two at the start of a session: read the persistent setting once with
 
 ## Tool selection
 
-Elefant exposes many tools. Most are self-explanatory from their descriptions. Four clusters deserve a point of view.
+Elefant exposes many tools. Most are self-explanatory from their descriptions. The clusters below deserve a point of view. Every tool is also listed in the *Full tool reference* table at the end.
 
 ### Choosing a search tool
 
-- **`search`** — unified search across both memories and wiki documents. Default choice when you're not sure what kind of content you need, or when the user's question could be answered by either personal memory or knowledge base content.
-- **`memory_search`** — memories only. Use when you specifically want the user's stored facts, preferences, decisions, or session context, and want to exclude knowledge base noise.
-- **`wiki_search_only`** — wiki documents only. Use when the user is asking about reference material, documentation, or shared knowledge, and personal memory would be a distraction.
+There are two kinds of search. Three tools run **semantic** similarity; one runs **lexical** keyword matching.
 
-When in doubt, start with `search`. Narrow to `memory_search` or `wiki_search_only` if results are diluted.
+- **`search`** — unified *semantic* search across both memories and wiki documents. Default choice when you're not sure what kind of content you need, or when the user's question could be answered by either personal memory or knowledge base content. Results are labelled 📖 Wiki or 🧠 Memory.
+- **`memory_search`** — memories only, semantic. Use when you specifically want the user's stored facts, preferences, decisions, or session context, and want to exclude knowledge base noise.
+- **`wiki_search_only`** — wiki documents only, semantic. Use when the user is asking about reference material, documentation, or shared knowledge, and personal memory would be a distraction.
+- **`git_search`** — *lexical* (keyword / symbol) search over synced git source repos — Postgres full-text + trigram, the way `grep` works over a checkout. This is the right tool for function names, error strings, config keys, routes, or any literal token in code, where exact matching beats semantic similarity. See *Navigating sources and code* below.
+
+When in doubt for knowledge questions, start with `search`. Narrow to `memory_search` or `wiki_search_only` if results are diluted. For anything in code, reach for `git_search`, not `search`.
 
 ### Choosing a capture tool
 
 - **`memory_capture`** — the default. Cheap, streams into the hot tier, gets clustered and promoted by the backend. Use this for nearly everything: preferences, decisions, project facts, where you left off, observations about the user's setup. Bloat is cheap because the compactor handles dedup and surfaces durable signal automatically.
 - **`memory_add`** — bypasses the hot tier and writes directly to durable. Use only when (a) the user explicitly says "remember this exactly" or similar, or (b) you are certain a single, well-formed durable record is the right outcome right now (e.g., a critical preference that should never be lost to compaction). Default to `memory_capture`; reach for `memory_add` deliberately.
-- **`memory_update`** — when you know an existing memory is now wrong or stale and the correction matters. Most stale information can be left for the compactor to handle as fresher captures accumulate. Use `memory_update` for explicit corrections ("actually I work at Y now, not X") or when leaving the old version in place would cause confusion.
+- **`memory_update`** — when you know an existing memory is now wrong or stale and the correction matters. Works on durable memories *and* on pending hot-tier captures: if the id isn't durable, the hot tier is tried automatically, so you can fix a bad capture immediately without waiting for the compactor. Durable edits are re-embedded and recorded in the `memory_revisions` audit trail. Most stale information can be left for the compactor; use `memory_update` for explicit corrections ("actually I work at Y now, not X") or when leaving the old version in place would cause confusion.
+
+### Inspecting and auditing memory
+
+These tools read *about* memory — what exists, how it's doing, and where a fact came from. Most are diagnostic; reach for them when the user asks about their memory, or when a result is surprising and you want to verify it before acting.
+
+- **`memory_list`** — list stored durable memories, optionally filtered by tags. Use to browse what's intentionally remembered under a tag (e.g. `project-x,decision`), rather than to answer a question (use `search` for that).
+- **`memory_introspect`** — aggregate retrospective over a time window (`24h`, `7d`, `30d`, `all`): what you captured, what got promoted, what got dropped, plus type/tag/source/score distributions. This is the "how is my memory doing?" tool — use it to check whether recent captures are surviving compaction, spot tag/type imbalances, or sanity-check compactor behaviour.
+- **`memory_provenance`** — the trail *backward* from one durable memory to the hot-tier captures it was synthesised from: when it was promoted, its compactor score, which sessions contributed, and the original capture text. This answers "why do I remember this?" — especially useful when a search hit looks surprising and you want to understand its origin before acting on it. "No provenance recorded" is expected for memories created via direct `memory_add` or before provenance tracking.
+- **`memory_revisions`** — the edit history of a durable memory: each prior version before an update overwrote it, when it changed, who changed it, and which fields. Use to audit how a memory evolved or to answer "what did this say before?" Never-edited memories return an empty history (not an error).
+- **`memory_session`** — a session diary: every memory captured under a given MCP session id, joining durable memories promoted from that session with the raw hot-tier captures it made (pending, promoted, or dropped). This is the cross-agent / cross-session **handoff** tool — use it to pick up where another agent (or your past self) left off, or to audit "what happened in session X?"
+- **`memory_events`** — the lower-level structured event log (storage/retrieval events from the Memory API, paginated). Use for raw auditing of recent activity in an agent pipeline when the higher-level views above aren't granular enough.
+- **`memory_delete`** — permanently removes a memory and its embedding. **No undo.** Prefer `memory_update` for corrections; reserve `memory_delete` for content the user asked you to forget, or genuine mistakes that shouldn't persist.
 
 ### Writing to the wiki
 
@@ -86,6 +103,26 @@ A few rules govern it, by design:
 
 Use `wiki_write` for the artifact; still `memory_capture` the *fact that you created it* if it matters for continuity ("Wrote the DB-restore runbook to `AI/runbooks/db-restore.md`").
 
+### Navigating and reading the wiki
+
+- **`wiki_tree`** — list every wiki page in the tenant, optionally scoped to a path prefix (`AI/`, `AI/runbooks/`). Use it to discover what already exists before searching or writing, or to browse a subtree. Returned paths are space-relative and can be passed straight to `get_wiki_page`.
+- **`get_wiki_page`** — fetch the full content of a page (with embedded images inlined), given a path from a search result or `wiki_tree`. Use after a search returns a relevant page when you need the whole document, or before rewriting a page so you know what's there.
+
+### Navigating sources and code
+
+When the knowledge base has synced git repositories, you can search and read their code directly — distinct from the wiki.
+
+- **`list_sources`** — list the synced git repos: names, upstream URLs, branches. Call this first to learn the *perimeter* before code-searching, and to interpret results (`Origin: git source <name>` is a repo chunk; `Origin: wiki` is a hand-authored page).
+- **`git_search`** — lexical/keyword search across synced repos (see *Choosing a search tool*). Returns matching files with line numbers and surrounding context. Iterate like `grep`: if a query misses, reformulate with synonyms or the exact symbol.
+- **`git_read`** — read a specific line span of a file from a synced source (`source_id` + `path`, optional `start`/`end`). The natural follow-up to a `git_search` hit when you need a wider view.
+- **`source_tree`** — list every file in one synced source, to see its layout and boundaries before deciding what to read.
+- **`set_source_state`** — turn a git source on/off *for this session only* (ephemeral; resets when the session ends). Narrows the active set; it never widens access beyond what the token can already see. Use to exclude a noisy source or focus on one repo.
+
+### Maintaining the index
+
+- **`wiki_reindex`** — trigger a full background reindex of wiki documents. Use after bulk content changes (file uploads, git pulls); search keeps working during indexing. Governed by the same scope as `wiki_write`.
+- **`reindex_status`** — check indexing state (idle / indexing / watching), progress, last-run timing, the active embedding provider/model, and recent errors. Use to monitor a reindex or verify index health before a large search session.
+
 ### Reading and writing settings
 
 `get_user_settings` and `set_user_settings` read and write Elefant's **prescriptive configuration** — real stored values (booleans, numbers), not semantic memory. Never use `search` or `memory_search` to discover them.
@@ -94,10 +131,6 @@ Use `wiki_write` for the artifact; still `memory_capture` the *fact that you cre
 - **`set_user_settings`** — writes ONE setting for the entire tenant. Because it's durable and tenant-wide, treat every call as approve-once: only call it when the user explicitly asks to change a setting ("turn on second-brain mode from now on", "set the promote score to 1.2"). Never call it speculatively or to "tidy up." Pass `default` (or `none`/`clear`) as the value to drop an override and return to the system default. It needs a token with `memory_write` permission; a permission error there is expected, not a bug.
 
 Mode preference and the compactor thresholds live here, not in memory. If the user wants second-brain mode on by default, `set_user_settings second_brain_mode on` — don't write a memory like "user prefers second-brain mode" and try to read it back next session.
-
-### Other tools
-
-`memory_delete`, `memory_list`, `memory_events`, `get_wiki_page`, `list_sources`, `source_tree`, `set_source_state`, `git_read`, `git_search`, `wiki_reindex`, `reindex_status` — use as their descriptions indicate. These are mostly inspection, source navigation, and administration; they don't need special guidance.
 
 ## Memory vs. wiki: where durable content belongs
 
@@ -163,7 +196,7 @@ A wiki page is a document a human will open and read. Write accordingly:
 
 ## Conflicts and stale information
 
-If a search returns contradictory memories, the newer or more specific one usually wins, but check the user when it matters. Don't silently pick a side on something consequential — "I have notes saying both X and Y about your setup; which is current?" is better than guessing wrong.
+If a search returns contradictory memories, the newer or more specific one usually wins, but check the user when it matters. Don't silently pick a side on something consequential — "I have notes saying both X and Y about your setup; which is current?" is better than guessing wrong. When an origin looks surprising, `memory_provenance` can show where the claim came from before you rely on it.
 
 If you discover a memory is stale through the conversation (the user contradicts it, or the situation has clearly changed), use `memory_update` to correct it. Leaving stale memories in place pollutes future searches. For a stale wiki page you authored under the AI folder, update it with `wiki_write`.
 
@@ -174,7 +207,9 @@ If you discover a memory is stale through the conversation (the user contradicts
 - **Treating Elefant as backup-only.** If you only write to Elefant and never read from it, it isn't memory — it's a journal. Search first.
 - **Capturing the conversation as transcript.** Captures are extracted signal, not verbatim history. Distill.
 - **Ignoring the wiki.** When the user has synced repositories or documents, `wiki_search_only` may answer questions faster and more authoritatively than memory. Use the right surface.
+- **Using semantic `search` to find a code symbol.** A function name, error string, or config key is a *lexical* lookup — that's `git_search` over synced sources, not `search`.
 - **Reaching for `memory_add` by default.** It bypasses the system that makes Elefant smart. Prefer `memory_capture` unless you have a specific reason.
+- **Deleting when you mean to correct.** `memory_delete` is permanent and has no undo; for "this is now wrong" use `memory_update`. Reserve delete for "forget this."
 - **Dumping long-form reference material into memory.** A multi-section runbook is a wiki page, not a memory. Use `wiki_write`.
 - **Using `wiki_write` for ephemeral notes.** A one-line preference or "where I left off" is memory, not a document. Don't litter the wiki with fragments.
 - **Trying to write outside the AI folder, or expecting to edit a promoted page.** The AI folder and the move-to-promote boundary are deliberate. Work within them.
@@ -188,10 +223,52 @@ If you discover a memory is stale through the conversation (the user contradicts
 | Substantive turn ending with durable content | `memory_capture` before closing |
 | User says "remember this exactly" | `memory_add` |
 | User corrects something you said | `memory_update` if a stored memory is now wrong; capture the correction either way |
+| User asks you to forget something | `memory_delete` (permanent, no undo) |
 | New conversation, Elefant tools present | `get_user_settings` once to learn mode + config; `search` for any obviously relevant context |
+| Picking up where another agent/session left off | `memory_session` with that session id |
+| "How is my memory doing?" / is capture surviving | `memory_introspect` over a window |
+| A search hit looks surprising — where did it come from? | `memory_provenance` on that memory id |
+| "What did this memory say before I edited it?" | `memory_revisions` |
 | User wants the default mode or a compactor threshold changed | `set_user_settings` (explicit request only, approve-once) |
 | Second-brain mode on, durable signal mid-turn | `memory_capture` immediately, keep responding |
 | Search returns contradictions on something consequential | Ask the user |
+| Finding a function / error string / config key in code | `git_search`, then `git_read` to open the span |
+| Knowing which repos are searchable | `list_sources` (and `source_tree` for one repo's layout) |
+| Focusing or excluding a source this session | `set_source_state` |
 | User wants a runbook / SOP / design doc / structured summary | `wiki_write` to a path under the AI folder (subfolders welcome) |
+| Discovering existing wiki pages before writing | `wiki_tree` |
 | Long-form content authored | `wiki_write` for the document; short `memory_capture` pointing to it |
 | Reading a wiki page before rewriting it | `get_wiki_page`, then `wiki_write` |
+| After bulk wiki/source changes | `wiki_reindex`, then `reindex_status` to monitor |
+
+## Full tool reference
+
+Every Elefant tool, grouped by purpose. The sections above give the point of view; this is the complete map.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `search` | Search | Unified **semantic** search over memories + wiki. The default lookup. |
+| `memory_search` | Search | Semantic search, **memories only**. |
+| `wiki_search_only` | Search | Semantic search, **wiki documents only**. |
+| `git_search` | Search | **Lexical** keyword/symbol search over synced git sources (grep-like). |
+| `memory_capture` | Write (memory) | Cheap hot-tier capture — the **default write**; compactor promotes survivors. |
+| `memory_add` | Write (memory) | Direct durable write; use for "remember this exactly" or a must-keep fact. |
+| `memory_update` | Write (memory) | Edit an existing memory (durable or pending hot capture); durable edits are audited. |
+| `memory_delete` | Write (memory) | Permanently remove a memory + embedding. **No undo.** |
+| `memory_list` | Inspect | List durable memories, optionally by tags. |
+| `memory_introspect` | Inspect | Aggregate health view over a window — captures, promotions, drops, distributions. |
+| `memory_provenance` | Inspect | Trace a durable memory back to the captures it was synthesised from. |
+| `memory_revisions` | Inspect | Edit history of a durable memory. |
+| `memory_session` | Inspect | Session diary — all memories captured under a session id (handoff). |
+| `memory_events` | Inspect | Low-level storage/retrieval event log (paginated). |
+| `wiki_write` | Write (wiki) | Create/update a Markdown page under the AI folder. |
+| `wiki_tree` | Navigate | List wiki pages, optionally under a path prefix. |
+| `get_wiki_page` | Navigate | Read a full wiki page (images inlined). |
+| `list_sources` | Navigate | List synced git source repos (names, URLs, branches). |
+| `source_tree` | Navigate | List every file in one synced source. |
+| `git_read` | Navigate | Read a line span of a file from a synced source. |
+| `set_source_state` | Config (session) | Turn a git source on/off for this session only (ephemeral). |
+| `wiki_reindex` | Maintain | Trigger a background reindex of wiki documents. |
+| `reindex_status` | Maintain | Report reindex state, progress, embedding model, errors. |
+| `get_user_settings` | Config | Read prescriptive settings (mode + compactor thresholds). Call once at session start. |
+| `set_user_settings` | Config | Write ONE tenant-wide setting. Approve-once, explicit request only. |
